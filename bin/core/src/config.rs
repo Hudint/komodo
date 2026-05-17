@@ -238,6 +238,13 @@ pub fn core_config() -> &'static CoreConfig {
       oidc_auto_redirect: env
         .komodo_oidc_auto_redirect
         .unwrap_or(config.oidc_auto_redirect),
+      oidc_groups_attribute_path: env
+        .komodo_oidc_groups_attribute_path
+        .unwrap_or(config.oidc_groups_attribute_path),
+      oidc_groups_strict: env
+        .komodo_oidc_groups_strict
+        .unwrap_or(config.oidc_groups_strict),
+      oidc_group_mapping: config.oidc_group_mapping,
       google_oauth: NamedOauthConfig {
         enabled: env
           .komodo_google_oauth_enabled

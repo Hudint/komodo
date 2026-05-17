@@ -1,4 +1,7 @@
-use std::sync::{Arc, LazyLock};
+use std::{
+  collections::HashSet,
+  sync::{Arc, LazyLock},
+};
 
 use anyhow::{Context as _, anyhow};
 use async_timing_util::{
@@ -6,7 +9,7 @@ use async_timing_util::{
 };
 use database::{
   bson::{Document, doc, to_bson},
-  mungos::by_id::update_one_by_id,
+  mungos::{by_id::update_one_by_id, find::find_collect},
 };
 use komodo_client::entities::{
   komodo_timestamp, optional_str,
@@ -451,6 +454,24 @@ impl AuthImpl for KomodoAuthImpl {
     })
   }
 
+  fn oidc_groups_attribute_path(&self) -> Option<&str> {
+    let path = core_config().oidc_groups_attribute_path.trim();
+    if path.is_empty() { None } else { Some(path) }
+  }
+
+  fn sync_oidc_login_groups(
+    &self,
+    user_id: String,
+    groups: Vec<String>,
+  ) -> mogh_auth_server::DynFuture<mogh_error::Result<()>> {
+    Box::pin(async move {
+      sync_oidc_group_mapping(&user_id, groups)
+        .await
+        .status_code(StatusCode::UNAUTHORIZED)?;
+      Ok(())
+    })
+  }
+
   // ===============
   // = GITHUB AUTH =
   // ===============
@@ -825,4 +846,106 @@ impl AuthImpl for KomodoAuthImpl {
   fn server_private_key(&self) -> Option<&RotatableKeyPair> {
     Some(core_keys())
   }
+}
+
+async fn sync_oidc_group_mapping(
+  user_id: &str,
+  external_groups: Vec<String>,
+) -> anyhow::Result<()> {
+  let config = core_config();
+  let mappings = &config.oidc_group_mapping;
+
+  if mappings.is_empty() {
+    if config.oidc_groups_strict {
+      return Err(anyhow!(
+        "OIDC login denied: strict group mapping is enabled but no oidc_group_mapping entries are configured"
+      ));
+    }
+    return Ok(());
+  }
+
+  let external_groups = external_groups
+    .into_iter()
+    .map(|group| group.trim().to_string())
+    .filter(|group| !group.is_empty())
+    .collect::<HashSet<_>>();
+
+  let matching_mappings = mappings
+    .iter()
+    .filter(|mapping| external_groups.contains(&mapping.external))
+    .collect::<Vec<_>>();
+
+  if matching_mappings.is_empty() {
+    if config.oidc_groups_strict {
+      return Err(anyhow!(
+        "OIDC login denied: no oidc_group_mapping matched the user's groups"
+      ));
+    }
+    return Ok(());
+  }
+
+  let enabled =
+    matching_mappings.iter().any(|mapping| mapping.enabled);
+  let mapped_admin =
+    matching_mappings.iter().any(|mapping| mapping.admin);
+  let desired_group_names = matching_mappings
+    .iter()
+    .flat_map(|mapping| mapping.groups.iter())
+    .map(|group| group.trim().to_string())
+    .filter(|group| !group.is_empty())
+    .collect::<HashSet<_>>();
+
+  let managed_group_names = mappings
+    .iter()
+    .flat_map(|mapping| mapping.groups.iter())
+    .map(|group| group.trim().to_string())
+    .filter(|group| !group.is_empty())
+    .collect::<HashSet<_>>();
+
+  let user = get_user(user_id).await?;
+
+  let update = doc! {
+    "$set": {
+      "enabled": enabled || user.super_admin,
+      "admin": mapped_admin || user.super_admin,
+    }
+  };
+
+  update_one_by_id(&db_client().users, user_id, update, None)
+    .await
+    .context("Failed to apply OIDC group mapping to user")?;
+
+  if managed_group_names.is_empty() {
+    return Ok(());
+  }
+
+  let managed_group_names =
+    managed_group_names.into_iter().collect::<Vec<_>>();
+  let managed_groups = find_collect(
+    &db_client().user_groups,
+    doc! { "name": { "$in": &managed_group_names } },
+    None,
+  )
+  .await
+  .context("Failed to query managed OIDC user groups")?;
+
+  for group in managed_groups {
+    let update = if desired_group_names.contains(&group.name) {
+      doc! { "$addToSet": { "users": user_id } }
+    } else {
+      doc! { "$pull": { "users": user_id } }
+    };
+    db_client()
+      .user_groups
+      .update_one(doc! { "name": &group.name }, update)
+      .await
+      .with_context(|| {
+        format!(
+          "Failed to sync OIDC mapping for user group '{}'",
+          group.name
+        )
+      })?;
+  }
+
+  Ok(())
 }

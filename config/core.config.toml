@@ -288,6 +288,34 @@ oidc_additional_audiences = []
 ## Default: false
 oidc_auto_redirect = false
 
+## Dot-separated claim path used to read OIDC groups.
+## Examples: "groups", "realm_access.roles"
+## Env: KOMODO_OIDC_GROUPS_ATTRIBUTE_PATH
+## Default: groups
+oidc_groups_attribute_path = "groups"
+
+## If true, deny OIDC login when no group mapping matches.
+## Env: KOMODO_OIDC_GROUPS_STRICT
+## Default: false
+oidc_groups_strict = false
+
+## Map OIDC external groups into Komodo auth.
+##
+## `external` matches entries from `oidc_groups_attribute_path`.
+## `groups` must reference existing Komodo user-group names.
+##
+## [[oidc_group_mapping]]
+## external = "komodo-admin"
+## enabled = true
+## admin = true
+## groups = ["admins"]
+##
+## [[oidc_group_mapping]]
+## external = "komodo-operator"
+## enabled = true
+## admin = false
+## groups = ["operators"]
+
 #########
 # OAUTH #
 #########

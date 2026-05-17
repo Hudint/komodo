@@ -138,3 +138,6 @@ regex = "1.12.3"
 
 [profile.release]
 strip = "debuginfo"
+
+[patch.crates-io]
+mogh_auth_server = { path = "lib/mogh_auth_server" }

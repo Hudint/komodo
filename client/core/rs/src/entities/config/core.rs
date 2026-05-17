@@ -15,7 +15,9 @@ use mogh_auth_client::config::NamedOauthConfig;
 use serde::Deserialize;
 
 use crate::{
-  deserializers::option_string_list_deserializer,
+  deserializers::{
+    option_string_list_deserializer, string_list_deserializer,
+  },
   entities::{
     Timelength,
     config::DatabaseConfig,
@@ -176,6 +178,10 @@ pub struct Env {
   pub komodo_oidc_additional_audiences_file: Option<PathBuf>,
   /// Override `oidc_auto_redirect`
   pub komodo_oidc_auto_redirect: Option<bool>,
+  /// Override `oidc_groups_attribute_path`
+  pub komodo_oidc_groups_attribute_path: Option<String>,
+  /// Override `oidc_groups_strict`
+  pub komodo_oidc_groups_strict: Option<bool>,
 
   /// Override `google_oauth.enabled`
   pub komodo_google_oauth_enabled: Option<bool>,
@@ -323,6 +329,21 @@ fn default_core_config_paths() -> Vec<PathBuf> {
 /// or simply override whichever fields you need using the environment.
 ///
 /// Refer to the [example file](https://github.com/moghtech/komodo/blob/main/config/core.config.toml) for a full example.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OidcGroupMapping {
+  /// OIDC external group name to match.
+  pub external: String,
+  /// Whether matched users should be enabled.
+  #[serde(default)]
+  pub enabled: bool,
+  /// Whether matched users should be admin.
+  #[serde(default)]
+  pub admin: bool,
+  /// Existing Komodo user groups to sync membership into.
+  #[serde(default, deserialize_with = "string_list_deserializer")]
+  pub groups: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoreConfig {
   // ===========
@@ -561,6 +582,19 @@ pub struct CoreConfig {
   /// Users can bypass the redirect by appending `?disableAutoLogin` to the login URL.
   #[serde(default)]
   pub oidc_auto_redirect: bool,
+
+  /// Dot-separated claim path containing OIDC groups.
+  /// Examples: `groups`, `realm_access.roles`.
+  #[serde(default = "default_oidc_groups_attribute_path")]
+  pub oidc_groups_attribute_path: String,
+
+  /// Deny login if no OIDC group mapping matches.
+  #[serde(default)]
+  pub oidc_groups_strict: bool,
+
+  /// Map external OIDC group names to Komodo authorization.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub oidc_group_mapping: Vec<OidcGroupMapping>,
 
   // =========
   // = Oauth =
@@ -827,6 +861,10 @@ fn default_init_admin_password() -> String {
   String::from("changeme")
 }
 
+fn default_oidc_groups_attribute_path() -> String {
+  String::from("groups")
+}
+
 fn default_auth_rate_limit_max_attempts() -> u16 {
   5
 }
@@ -924,6 +962,10 @@ impl Default for CoreConfig {
       oidc_use_full_email: Default::default(),
       oidc_additional_audiences: Default::default(),
       oidc_auto_redirect: Default::default(),
+      oidc_groups_attribute_path: default_oidc_groups_attribute_path(
+      ),
+      oidc_groups_strict: Default::default(),
+      oidc_group_mapping: Default::default(),
       google_oauth: Default::default(),
       github_oauth: Default::default(),
       auth_rate_limit_disabled: Default::default(),
@@ -1029,6 +1071,9 @@ impl CoreConfig {
         .map(|aud| empty_or_redacted(aud))
         .collect(),
       oidc_auto_redirect: config.oidc_auto_redirect,
+      oidc_groups_attribute_path: config.oidc_groups_attribute_path,
+      oidc_groups_strict: config.oidc_groups_strict,
+      oidc_group_mapping: config.oidc_group_mapping,
       google_oauth: NamedOauthConfig {
         enabled: config.google_oauth.enabled,
         client_id: empty_or_redacted(&config.google_oauth.client_id),
